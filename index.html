@@ -1,12 +1,61 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ringil</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    
-
+    <div class="app-container">
+        <header class="app-header">
+            <h1>Ringil AI Chat</h1>
+            <div class="header-controls">
+                <select id="modelSelector" class="model-selector">
+                    <option value="gpt-4">GPT-4</option>
+                    <option value="gpt-3.5">GPT-3.5</option>
+                    <option value="claude">Claude</option>
+                </select>
+            </div>
+        </header>
+        <div class="content-wrapper">
+            <main class="main-container">
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages"></div>
+                    <div class="chat-input">
+                        <div class="input-container">
+                            <input type="text" id="userInput" placeholder="Type your message... (Press Enter to send)">
+                            <button id="sendButton" title="Send message">➤</button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+            <aside class="side-menu">
+                <nav class="menu-sections">
+                    <div class="menu-section">
+                        <div class="history-header">
+                            <div class="search-container">
+                                <input type="text" id="searchHistory" placeholder="Search chats...">
+                            </div>
+                            <button id="newChatBtn" class="icon-button">+ New Chat</button>
+                        </div>
+                        <h3>Chat History</h3>
+                        <div class="chat-history" id="chatHistory">
+                            <!-- Chat history items will be added here dynamically -->
+                        </div>
+                    </div>
+                    <div class="menu-section">
+                        <h3>Tools</h3>
+                        <ul>
+                            <li><a href="#" data-section="api-settings">API Settings</a></li>
+                            <li><a href="#" data-section="artifacts">Artifacts</a></li>
+                            <li><a href="#" data-section="mcp">MCP</a></li>
+                        </ul>
+                    </div>
+                </nav>
+            </aside>
+        </div>
+    </div>
+    <script src="main.js"></script>
 </body>
 </html>
