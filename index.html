@@ -5,18 +5,89 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ringil</title>
     <link rel="stylesheet" href="styles.css">
+    <style>
+        .settings-dialog {
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            max-width: 600px;
+            width: 90%;
+        }
+        .model-config {
+            margin: 15px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .model-config input[type="text"],
+        .model-config textarea {
+            width: 100%;
+            margin: 5px 0;
+            padding: 5px;
+        }
+        .model-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .dialog-actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .settings-panel {
+            padding: 20px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .models-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .model-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .settings-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        .primary {
+            background-color: #0066cc;
+            color: white;
+        }
+    </style>
 </head>
 <body>
     <div class="app-container">
         <header class="app-header">
             <h1>Ringil AI Chat</h1>
-            <div class="header-controls">
-                <select id="modelSelector" class="model-selector">
+            <div class="model-control">
+                <select id="modelSelector" class="model-selector" data-tooltip="Choose AI model">
                     <option value="gpt-4">GPT-4</option>
                     <option value="gpt-3.5">GPT-3.5</option>
                     <option value="claude">Claude</option>
                 </select>
+                <button id="addModelBtn" class="icon-button add-model-btn" title="Add Custom Model" data-tooltip="Add custom model">+</button>
             </div>
+            <div class="header-controls"></div>
         </header>
         <div class="content-wrapper">
             <main class="main-container">
@@ -34,15 +105,13 @@
                 <nav class="menu-sections">
                     <div class="menu-section">
                         <div class="history-header">
+                            <button id="newChatBtn" class="icon-button" data-tooltip="New chat (Ctrl+N)">+ New Chat</button>
                             <div class="search-container">
-                                <input type="text" id="searchHistory" placeholder="Search chats...">
+                                <input type="text" id="searchHistory" placeholder="Search chats... (Ctrl+K)" data-tooltip="Use up/down arrows for input history">
                             </div>
-                            <button id="newChatBtn" class="icon-button">+ New Chat</button>
                         </div>
                         <h3>Chat History</h3>
-                        <div class="chat-history" id="chatHistory">
-                            <!-- Chat history items will be added here dynamically -->
-                        </div>
+                        <div class="chat-history" id="chatHistory"></div>
                     </div>
                     <div class="menu-section">
                         <h3>Tools</h3>
@@ -56,6 +125,6 @@
             </aside>
         </div>
     </div>
-    <script src="main.js"></script>
+    <script src="main.js" type="module"></script>
 </body>
 </html>

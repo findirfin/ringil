@@ -1,3 +1,7 @@
+import StorageService from './services/StorageService.js';
+import MarkdownService from './services/MarkdownService.js';
+import ModelsService from './services/ModelsService.js';
+
 class ChatApp {
     constructor() {
         this.chatMessages = document.getElementById('chatMessages');
@@ -10,10 +14,20 @@ class ChatApp {
         this.conversations = [];
         this.searchHistory = document.getElementById('searchHistory');
         this.newChatBtn = document.getElementById('newChatBtn');
+        this.addModelBtn = document.getElementById('addModelBtn');
         
         this.loadChatHistory();
         this.autoSaveTimeout = null;
         this.initializeEventListeners();
+        this.setupKeyboardShortcuts();
+        this.historyDisplayLimit = 5;
+        this.showingAllHistory = false;
+        this.lastUsedModel = null;
+        this.inputHistory = [];
+        this.inputHistoryIndex = -1;
+        this.isProcessing = false;
+        this.maxInputHistory = 50;
+        this.updateModelSelector();
     }
 
     initializeEventListeners() {
@@ -21,10 +35,12 @@ class ChatApp {
         this.userInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.handleUserInput();
         });
+        
+        // Remove old model change handler
         this.modelSelector.addEventListener('change', () => {
             this.currentModel = this.modelSelector.value;
-            this.addSystemMessage(`Model switched to ${this.currentModel}`);
         });
+        
         this.menuItems.forEach(item => {
             item.addEventListener('click', (e) => this.handleMenuItemClick(e));
         });
@@ -37,70 +53,60 @@ class ChatApp {
 
         this.searchHistory.addEventListener('input', () => this.filterHistory());
         this.newChatBtn.addEventListener('click', () => this.startNewChat());
-    }
+        this.addModelBtn.addEventListener('click', () => this.handleAddModel());
 
-    convertToMarkdown(conversation) {
-        const lines = [];
-        const title = conversation.title.trim() || 'Untitled Chat';
-        lines.push(`# ${title}`);
-        lines.push(`\nStarted: ${new Date(conversation.timestamp).toLocaleString()}`);
-        lines.push(`Model: ${this.currentModel}`);
-        lines.push(`\n## Conversation\n`);
-
-        conversation.messages.forEach(msg => {
-            if (msg.isSystem) {
-                lines.push(`\n---\n_${msg.text}_\n---\n`);
-            } else {
-                const role = msg.isUser ? '**User**' : '**Assistant**';
-                lines.push(`\n### ${role}\n${msg.text}\n`);
+        this.userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.navigateInputHistory(-1);
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.navigateInputHistory(1);
             }
         });
-
-        return lines.join('\n');
     }
 
-    async saveToMarkdown(conversation) {
-        const markdown = this.convertToMarkdown(conversation);
-        const filename = `chat-${conversation.id}.md`;
+    navigateInputHistory(direction) {
+        if (!this.inputHistory.length) return;
         
-        try {
-            // Save to IndexedDB
-            await this.saveToIndexedDB(conversation.id, {
-                filename,
-                content: markdown,
-                timestamp: new Date(),
-                title: conversation.title
-            });
-        } catch (error) {
-            console.error('Error saving markdown:', error);
+        this.inputHistoryIndex = Math.max(-1, Math.min(
+            this.inputHistoryIndex + direction,
+            this.inputHistory.length - 1
+        ));
+
+        if (this.inputHistoryIndex === -1) {
+            this.userInput.value = '';
+        } else {
+            this.userInput.value = this.inputHistory[this.inputHistoryIndex];
         }
+        
+        // Move cursor to end
+        setTimeout(() => {
+            this.userInput.selectionStart = this.userInput.value.length;
+            this.userInput.selectionEnd = this.userInput.value.length;
+        }, 0);
     }
 
-    async initIndexedDB() {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open('RingilChats', 1);
-            
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve(request.result);
-            
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                if (!db.objectStoreNames.contains('chats')) {
-                    db.createObjectStore('chats', { keyPath: 'id' });
-                }
-            };
-        });
+    setLoading(isLoading) {
+        this.isProcessing = isLoading;
+        this.sendButton.disabled = isLoading;
+        this.userInput.disabled = isLoading;
+        this.sendButton.innerHTML = isLoading ? '...' : '➤';
+        this.userInput.style.opacity = isLoading ? '0.7' : '1';
     }
 
-    async saveToIndexedDB(id, data) {
-        const db = await this.initIndexedDB();
-        return new Promise((resolve, reject) => {
-            const transaction = db.transaction(['chats'], 'readwrite');
-            const store = transaction.objectStore('chats');
-            const request = store.put({ id, ...data });
-            
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Cmd/Ctrl + K to focus search
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                this.searchHistory.focus();
+            }
+            // Cmd/Ctrl + N for new chat
+            if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+                e.preventDefault();
+                this.startNewChat();
+            }
         });
     }
 
@@ -131,10 +137,11 @@ class ChatApp {
             const message = {
                 text,
                 isUser,
-                timestamp: new Date().toISOString() // Store as ISO string for consistency
+                timestamp: new Date().toISOString()
             };
             
-            // Add to current conversation
+            // Update conversation timestamp when modified
+            this.currentConversation.lastEdited = new Date().toISOString();
             this.currentConversation.messages.push(message);
             
             // Update title if needed
@@ -142,10 +149,11 @@ class ChatApp {
                 this.currentConversation.title = text.slice(0, 30) + (text.length > 30 ? '...' : '');
             }
             
-            // Update conversation in the conversations array
+            // Update and sort conversations
             const index = this.conversations.findIndex(c => c.id === this.currentConversation.id);
             if (index !== -1) {
                 this.conversations[index] = this.currentConversation;
+                this.sortConversations();
             }
             
             // Save everything
@@ -153,15 +161,30 @@ class ChatApp {
         }
     }
 
-    addSystemMessage(text, timestamp = new Date()) {
-        this.renderSystemMessage(text, timestamp);
-        
+    sortConversations() {
+        this.conversations.sort((a, b) => {
+            const dateA = new Date(a.lastEdited || a.timestamp);
+            const dateB = new Date(b.lastEdited || b.timestamp);
+            return dateB - dateA;
+        });
+    }
+
+    addSystemMessage(text, type = 'info') {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `system-message ${type}`;
+        messageDiv.innerHTML = `
+            ${text}
+            <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+        `;
+        this.chatMessages.appendChild(messageDiv);
+        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+
         if (this.currentConversation) {
             // Create message object with timestamp
             const message = {
                 text,
                 isSystem: true,
-                timestamp: timestamp.toISOString() // Store as ISO string for consistency
+                timestamp: new Date().toISOString() // Store as ISO string for consistency
             };
             
             // Add to current conversation
@@ -180,11 +203,24 @@ class ChatApp {
 
     async handleUserInput() {
         const message = this.userInput.value.trim();
-        if (!message) return;
+        if (!message || this.isProcessing) return;
+
+        // Add to input history
+        if (this.inputHistory[0] !== message) {
+            this.inputHistory.unshift(message);
+            if (this.inputHistory.length > this.maxInputHistory) {
+                this.inputHistory.pop();
+            }
+        }
+        this.inputHistoryIndex = -1;
 
         if (!this.currentConversation) {
             this.createNewConversation();
             this.addSystemMessage('New chat started');
+            this.lastUsedModel = this.currentModel;
+        } else if (this.lastUsedModel !== this.currentModel) {
+            this.addSystemMessage(`Model switched to ${this.currentModel}`);
+            this.lastUsedModel = this.currentModel;
         }
 
         this.addMessage(message, true);
@@ -194,13 +230,18 @@ class ChatApp {
     }
 
     async processAIResponse(message) {
+        this.setLoading(true);
         try {
-            // TODO: Implement actual AI API call with this.currentModel
-            const response = await this.mockAIResponse(message);
-            this.addMessage(`[${this.currentModel}] ${response}`);
+            const response = await ModelsService.sendCompletion(
+                this.currentModel,
+                this.currentConversation.messages
+            );
+            this.addMessage(response);
         } catch (error) {
             console.error('Error processing AI response:', error);
-            this.addMessage('Sorry, there was an error processing your request.');
+            this.addSystemMessage(`Error: ${error.message}`, 'error');
+        } finally {
+            this.setLoading(false);
         }
     }
 
@@ -220,8 +261,122 @@ class ChatApp {
     handleMenuItemClick(e) {
         e.preventDefault();
         const section = e.target.dataset.section;
+        if (section === 'api-settings') {
+            this.showAPISettings();
+        }
         // TODO: Implement section handling
         console.log(`Navigating to section: ${section}`);
+    }
+
+    async showAPISettings() {
+        const models = ModelsService.getModels();
+        const sideMenu = document.querySelector('.side-menu');
+        const originalContent = sideMenu.innerHTML;
+        
+        sideMenu.innerHTML = `
+            <div class="settings-panel">
+                <div class="settings-header">
+                    <h2>API Settings</h2>
+                    <button class="back-button">← Back</button>
+                </div>
+                <div class="models-list">
+                    ${models.map(model => `
+                        <div class="model-config" data-id="${model.id}">
+                            <div class="model-header">
+                                <h3>${model.name}</h3>
+                                <button class="delete-model" title="Delete Model">🗑️</button>
+                            </div>
+                            <input type="text" class="api-key" placeholder="API Key" value="${model.apiKey || ''}" />
+                            <textarea class="system-prompt" placeholder="System Prompt">${model.systemPrompt || ''}</textarea>
+                            <input type="text" class="api-endpoint" placeholder="API Endpoint" value="${model.apiEndpoint || ''}" />
+                            <div class="model-controls">
+                                <label>Temperature: 
+                                    <input type="number" class="temperature" value="${model.temperature}" min="0" max="2" step="0.1" />
+                                </label>
+                                <label>Max Tokens: 
+                                    <input type="number" class="max-tokens" value="${model.maxTokens}" min="100" step="100" />
+                                </label>
+                                <label>
+                                    <input type="checkbox" class="enabled" ${model.enabled ? 'checked' : ''} />
+                                    Enabled
+                                </label>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="settings-actions">
+                    <button class="add-model">Add New Model</button>
+                    <button class="save-settings primary">Save Changes</button>
+                </div>
+            </div>
+        `;
+
+        const addModelBtn = sideMenu.querySelector('.add-model');
+        const saveBtn = sideMenu.querySelector('.save-settings');
+        const backBtn = sideMenu.querySelector('.back-button');
+        const modelsList = sideMenu.querySelector('.models-list');
+
+        addModelBtn.onclick = () => {
+            const modelId = 'model-' + Date.now();
+            const modelConfig = document.createElement('div');
+            modelConfig.className = 'model-config';
+            modelConfig.dataset.id = modelId;
+            modelConfig.innerHTML = `
+                <div class="model-header">
+                    <input type="text" class="model-name" placeholder="Model Name" />
+                    <button class="delete-model" title="Delete Model">🗑️</button>
+                </div>
+                <input type="text" class="api-key" placeholder="API Key" />
+                <textarea class="system-prompt" placeholder="System Prompt">You are a helpful AI assistant.</textarea>
+                <input type="text" class="api-endpoint" placeholder="API Endpoint" />
+                <div class="model-controls">
+                    <label>Temperature: 
+                        <input type="number" class="temperature" value="0.7" min="0" max="2" step="0.1" />
+                    </label>
+                    <label>Max Tokens: 
+                        <input type="number" class="max-tokens" value="2000" min="100" step="100" />
+                    </label>
+                    <label>
+                        <input type="checkbox" class="enabled" checked />
+                        Enabled
+                    </label>
+                </div>
+            `;
+            modelsList.appendChild(modelConfig);
+        };
+
+        saveBtn.onclick = () => {
+            const updatedModels = Array.from(modelsList.querySelectorAll('.model-config')).map(el => ({
+                id: el.dataset.id,
+                name: el.querySelector('.model-name')?.value || el.querySelector('h3')?.textContent,
+                apiKey: el.querySelector('.api-key').value,
+                systemPrompt: el.querySelector('.system-prompt').value,
+                apiEndpoint: el.querySelector('.api-endpoint').value,
+                temperature: parseFloat(el.querySelector('.temperature').value),
+                maxTokens: parseInt(el.querySelector('.max-tokens').value),
+                enabled: el.querySelector('.enabled').checked
+            }));
+
+            ModelsService.getModels().forEach(model => ModelsService.deleteModel(model.id));
+            updatedModels.forEach(model => ModelsService.addModel(model));
+            this.updateModelSelector();
+            sideMenu.innerHTML = originalContent;
+        };
+
+        backBtn.onclick = () => {
+            if (confirm('Discard changes?')) {
+                sideMenu.innerHTML = originalContent;
+            }
+        };
+
+        modelsList.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-model')) {
+                const modelConfig = e.target.closest('.model-config');
+                if (confirm('Delete this model?')) {
+                    modelConfig.remove();
+                }
+            }
+        });
     }
 
     createNewConversation() {
@@ -230,38 +385,55 @@ class ChatApp {
             id: Date.now(),
             title: 'New Chat',
             messages: [],
-            timestamp
+            timestamp,
+            lastEdited: timestamp
         };
         this.conversations.unshift(this.currentConversation);
         this.saveChatHistory();
         this.updateChatHistory();
+        this.lastUsedModel = this.currentModel;
     }
 
     updateChatHistory() {
         this.chatHistory.innerHTML = '';
-        this.conversations.forEach(conv => {
+        const displayCount = this.showingAllHistory ? this.conversations.length : this.historyDisplayLimit;
+        const visibleConversations = this.conversations.slice(0, displayCount);
+        
+        visibleConversations.forEach(conv => {
             const historyItem = document.createElement('div');
             historyItem.className = 'history-item';
+            historyItem.dataset.id = conv.id;
             if (this.currentConversation && conv.id === this.currentConversation.id) {
                 historyItem.classList.add('active');
             }
             
+            // Get last used model from messages
+            const lastModel = this.getLastUsedModel(conv);
+            const date = new Date(conv.timestamp).toLocaleDateString();
+            
             historyItem.innerHTML = `
                 <div class="history-item-content">
                     <div class="title">${conv.title}</div>
-                    <div class="timestamp">${new Date(conv.timestamp).toLocaleString()}</div>
+                    <div class="meta">
+                        <span>${date}</span>
+                        ${lastModel ? `<span>${lastModel}</span>` : ''}
+                    </div>
                 </div>
                 <div class="history-actions">
+                    <button class="rename-button" title="Rename Chat">✎</button>
                     <button class="download-button" title="Download Markdown">📥</button>
                     <button class="delete-button" title="Delete Chat">🗑️</button>
                 </div>
             `;
             
             historyItem.querySelector('.history-item-content').addEventListener('click', () => {
-                // Only load if it's not the current conversation
                 if (!this.currentConversation || conv.id !== this.currentConversation.id) {
                     this.loadConversation(conv);
                 }
+            });
+            historyItem.querySelector('.rename-button').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.renameConversation(conv);
             });
             historyItem.querySelector('.download-button').addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -274,6 +446,53 @@ class ChatApp {
             
             this.chatHistory.appendChild(historyItem);
         });
+
+        // Add toggle button if needed
+        if (this.conversations.length > this.historyDisplayLimit) {
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = this.showingAllHistory ? 'show-less-btn' : 'show-more-btn';
+            toggleBtn.textContent = this.showingAllHistory 
+                ? 'Show Less'
+                : `Show More (${this.conversations.length - this.historyDisplayLimit} more)`;
+            toggleBtn.addEventListener('click', () => {
+                this.showingAllHistory = !this.showingAllHistory;
+                this.updateChatHistory();
+            });
+            this.chatHistory.appendChild(toggleBtn);
+        }
+    }
+
+    async renameConversation(conversation) {
+        const newTitle = prompt('Enter new name for chat:', conversation.title);
+        if (!newTitle || newTitle === conversation.title) return;
+
+        // Update title in memory
+        conversation.title = newTitle;
+        if (this.currentConversation && conversation.id === this.currentConversation.id) {
+            this.currentConversation.title = newTitle;
+        }
+
+        // Update title in conversations array
+        const index = this.conversations.findIndex(c => c.id === conversation.id);
+        if (index !== -1) {
+            this.conversations[index].title = newTitle;
+        }
+
+        // Save changes and update UI
+        this.saveChatHistory();
+        this.updateChatHistory();
+    }
+
+    getLastUsedModel(conversation) {
+        // Find the last model change message
+        const modelMessage = [...conversation.messages]
+            .reverse()
+            .find(msg => msg.isSystem && msg.text.includes('Model switched to'));
+        
+        if (modelMessage) {
+            return modelMessage.text.replace('Model switched to ', '');
+        }
+        return null;
     }
 
     async deleteConversation(id) {
@@ -322,56 +541,62 @@ class ChatApp {
             }
         });
         
+        // Set the last used model from the conversation history
+        this.lastUsedModel = this.getLastUsedModel(conversation) || this.currentModel;
+        
         this.updateChatHistory();
     }
 
     async downloadMarkdown(conversation) {
-        const markdown = this.convertToMarkdown(conversation);
+        const markdown = MarkdownService.convertToMarkdown(conversation, this.currentModel);
         const filename = `chat-${conversation.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${conversation.id}.md`;
-        
-        const blob = new Blob([markdown], { type: 'text/markdown' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        MarkdownService.downloadMarkdown(markdown, filename);
     }
 
     saveChatHistory() {
-        // Save to localStorage
-        localStorage.setItem('chatHistory', JSON.stringify(this.conversations));
+        StorageService.saveChatHistory(this.conversations);
         
-        // Save current conversation to IndexedDB
         if (this.currentConversation) {
-            this.saveToMarkdown(this.currentConversation);
+            const markdown = MarkdownService.convertToMarkdown(this.currentConversation, this.currentModel);
+            StorageService.saveToIndexedDB(this.currentConversation.id, {
+                filename: `chat-${this.currentConversation.id}.md`,
+                content: markdown,
+                timestamp: new Date(),
+                title: this.currentConversation.title
+            }).catch(error => console.error('Error saving markdown:', error));
         }
     }
 
     loadChatHistory() {
-        const saved = localStorage.getItem('chatHistory');
-        if (saved) {
-            this.conversations = JSON.parse(saved);
-            this.updateChatHistory();
-        }
+        this.conversations = StorageService.loadChatHistory();
+        this.sortConversations();
+        this.updateChatHistory();
     }
 
-    filterHistory() {
-        const searchTerm = this.searchHistory.value.toLowerCase();
-        const historyItems = this.chatHistory.querySelectorAll('.history-item');
+    async handleAddModel() {
+        const modelName = prompt('Enter custom model name:');
+        if (!modelName) return;
+
+        const option = document.createElement('option');
+        option.value = modelName.toLowerCase();
+        option.textContent = modelName;
+        this.modelSelector.appendChild(option);
+        this.modelSelector.value = option.value;
         
-        historyItems.forEach(item => {
-            const title = item.querySelector('.title').textContent.toLowerCase();
-            item.style.display = title.includes(searchTerm) ? 'block' : 'none';
-        });
+        // Trigger model change
+        this.currentModel = option.value;
+        this.addSystemMessage(`Model switched to ${this.currentModel}`);
     }
 
-    startNewChat() {
-        this.chatMessages.innerHTML = '';
-        this.createNewConversation();
-        this.addSystemMessage('New chat started');
+    updateModelSelector() {
+        this.modelSelector.innerHTML = '';
+        ModelsService.getModels().forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = model.name;
+            this.modelSelector.appendChild(option);
+        });
+        this.currentModel = this.modelSelector.value;
     }
 }
 
